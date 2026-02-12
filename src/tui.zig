@@ -109,7 +109,7 @@ const Model = struct {
         return border.render(alloc, colored_text[0 .. colored_text.len - 1]) catch colored_text;
     }
 
-    pub fn renderSpace(alloc: std.mem.Allocator) []const u8 {
+    pub fn renderBlank(alloc: std.mem.Allocator) []const u8 {
         const style: zz.Style = .{
             .background = .none,
             .foreground = zz.Color.black(),
@@ -124,6 +124,10 @@ const Model = struct {
         const text = std.fmt.allocPrint(alloc, "   ", .{}) catch "!";
         const colored_text = style.render(alloc, text) catch text;
         return border.render(alloc, colored_text[0 .. colored_text.len - 1]) catch colored_text;
+    }
+
+    pub fn renderSpace() []const u8 {
+        return "   \n   \n   ";
     }
 
     fn joinV(alloc: std.mem.Allocator, elems: [2][]const u8) ![]const u8 {
@@ -143,42 +147,94 @@ const Model = struct {
         return try zz.joinHorizontal(alloc, &elems);
     }
 
-    pub fn view(self: *Model, ctx: *zz.Context) []const u8 {
-        var guesses_table: []const u8 = "";
+    fn renderPlayedWords(self: *Model, alloc: std.mem.Allocator) ![]const u8 {
+        var played_words_text: []const u8 = "";
         for (0..self.wordle.guesslen) |i| {
             var row: []const u8 = "";
             for (0..self.wordle.word.len) |j| {
-                const c = renderChar(ctx.allocator, self.wordle.guess[i][j]);
-                row = joinH(ctx.allocator, .{ row, c }) catch "ERROR";
+                const c = renderChar(alloc, self.wordle.guess[i][j]);
+                row = try joinH(alloc, .{ row, c });
             }
-            guesses_table = joinV(ctx.allocator, .{ guesses_table, row }) catch "ERROR";
+            played_words_text = try joinV(alloc, .{ played_words_text, row });
         }
 
+        return played_words_text;
+    }
+
+    fn renderCurrWord(self: *Model, alloc: std.mem.Allocator) ![]const u8 {
         var curr_word_text: []const u8 = "";
         if (!self.wordle.hasEnded()) {
             for (0..self.curr_word_len) |i| {
-                const c = renderChar(ctx.allocator, .{ .char = self.curr_word[i], .match = .unknown });
-                curr_word_text = joinH(ctx.allocator, .{ curr_word_text, c }) catch "ERROR";
+                const c = renderChar(alloc, .{ .char = self.curr_word[i], .match = .unknown });
+                curr_word_text = try joinH(alloc, .{ curr_word_text, c });
             }
             for (self.curr_word_len..self.curr_word.len) |_| {
-                const c = renderSpace(ctx.allocator);
-                curr_word_text = joinH(ctx.allocator, .{ curr_word_text, c }) catch "ERROR";
+                const c = renderBlank(alloc);
+                curr_word_text = try joinH(alloc, .{ curr_word_text, c });
             }
         }
+        return curr_word_text;
+    }
 
-        var text = joinV(ctx.allocator, .{ guesses_table, curr_word_text }) catch "ERROR";
-
-        if (self.wordle.guesslen < self.wordle.max_guesses) {
+    fn renderBlankLines(self: *Model, alloc: std.mem.Allocator) ![]const u8 {
+        var empty_lines_text: []const u8 = "";
+        if (!self.wordle.hasEnded()) {
             for (self.wordle.guesslen..self.wordle.max_guesses - 1) |_| {
                 var row: []const u8 = "";
                 for (0..self.wordle.word.len) |_| {
-                    const c: []const u8 = renderSpace(ctx.allocator);
-                    row = joinH(ctx.allocator, .{ row, c }) catch "ERROR";
+                    const c: []const u8 = renderBlank(alloc);
+                    row = try joinH(alloc, .{ row, c });
                 }
-                text = joinV(ctx.allocator, .{ text, row }) catch "ERROR";
+                empty_lines_text = try joinV(alloc, .{ empty_lines_text, row });
             }
         }
-        const centered = zz.place.place(ctx.allocator, ctx.width, ctx.height, .center, .middle, text) catch "ERROR";
+        return empty_lines_text;
+    }
+
+    fn renderWordleTable(self: *Model, alloc: std.mem.Allocator) ![]const u8 {
+        const played_words_text = try self.renderPlayedWords(alloc);
+        const curr_word_text = try self.renderCurrWord(alloc);
+        const typed_text = try joinV(alloc, .{ played_words_text, curr_word_text });
+        const empty_lines = try self.renderBlankLines(alloc);
+
+        const table = try joinV(alloc, .{ typed_text, empty_lines });
+
+        return table;
+    }
+
+    fn renderKeyboard(self: *Model, alloc: std.mem.Allocator) ![]const u8 {
+        const query: [3][]const u8 = .{ "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" };
+        var keyboard: []const u8 = "";
+        for (0..query.len) |i| {
+            var row: []const u8 = "";
+            if (i == 1)
+                row = try joinH(alloc, .{ row, renderSpace() });
+            if (i == 2) {
+                row = try joinH(alloc, .{ row, renderSpace() });
+                row = try joinH(alloc, .{ row, renderSpace() });
+                row = try joinH(alloc, .{ row, "  " });
+            }
+            for (0..query[i].len) |j| {
+                const c = renderChar(alloc, .{ .char = query[i][j], .match = self.wordle.keyboard[query[i][j]] });
+                row = try joinH(alloc, .{ row, c });
+            }
+            keyboard = try joinV(alloc, .{ keyboard, row });
+        }
+
+        return keyboard;
+    }
+
+    pub fn view(self: *Model, ctx: *zz.Context) []const u8 {
+        const table = self.renderWordleTable(ctx.allocator) catch |e| reportError(e);
+        const spacer = renderSpace();
+        var keyboard = self.renderKeyboard(ctx.allocator) catch |e| reportError(e);
+        keyboard = zz.place.place(ctx.allocator, ctx.width, 1, .center, .top, keyboard) catch |e| reportError(e);
+
+        var text = joinV(ctx.allocator, .{ table, spacer }) catch |e| reportError(e);
+        text = zz.place.place(ctx.allocator, ctx.width, 1, .center, .top, text) catch |e| reportError(e);
+        text = joinV(ctx.allocator, .{ text, keyboard }) catch |e| reportError(e);
+
+        const centered = zz.place.place(ctx.allocator, ctx.width, ctx.height, .center, .middle, text) catch |e| reportError(e);
         return centered;
     }
 };
