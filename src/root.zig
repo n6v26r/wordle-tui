@@ -22,6 +22,7 @@ pub const Wordle = struct {
     guesslen: u32 = 0,
     keyboard: [AlphabetSize]KeyState = undefined,
     wordfrecv: [AlphabetSize]u32 = std.mem.zeroes(@FieldType(@This(), "wordfrecv")),
+    solved: bool = false,
 
     fn buildFrecv(self: *Wordle) void {
         for (0..self.word.len) |i| {
@@ -50,7 +51,7 @@ pub const Wordle = struct {
     }
 
     pub fn hasEnded(self: *Wordle) bool {
-        return self.guesslen == self.max_guesses;
+        return self.guesslen == self.max_guesses or self.solved;
     }
 
     pub fn sendWord(self: *Wordle, word: []const u8) !void {
@@ -61,6 +62,7 @@ pub const Wordle = struct {
 
         var frecv: [AlphabetSize]u32 = self.wordfrecv;
 
+        var matched: u32 = 0;
         for (0..self.word.len) |i| {
             self.guess[self.guesslen][i] = .{ .char = word[i], .match = .none };
             self.keyboard[self.guess[self.guesslen][i].char] = .none;
@@ -69,9 +71,12 @@ pub const Wordle = struct {
                     frecv[word[i]] -= 1;
                 self.guess[self.guesslen][i].match = .ok;
                 self.keyboard[self.guess[self.guesslen][i].char] = .ok;
+                matched += 1;
                 continue;
             }
         }
+        if (matched == self.word.len)
+            self.solved = true;
 
         for (0..self.word.len) |i| {
             if (self.guess[self.guesslen][i].match == .none and frecv[word[i]] > 0) {

@@ -2,6 +2,7 @@ const std = @import("std");
 
 const Wordle = @import("wordle").Wordle;
 const zz = @import("zigzag");
+pub const uppercase = zz.transforms.uppercase;
 
 const Settings = struct {
     word: []const u8,
@@ -20,6 +21,8 @@ const Model = struct {
     curr_word_len: u32 = 0,
 
     fn addLetter(self: *Model, key: zz.KeyEvent) !void {
+        if (self.wordle.hasEnded())
+            return;
         if (self.curr_word_len == self.curr_word.len)
             return error.WordFull;
 
@@ -29,6 +32,8 @@ const Model = struct {
     }
 
     fn delLetter(self: *Model) !void {
+        if (self.wordle.hasEnded())
+            return;
         if (self.curr_word_len == 0)
             return error.WordEmpty;
 
@@ -53,6 +58,8 @@ const Model = struct {
                 .escape => return .quit,
                 .backspace => self.delLetter() catch {},
                 .enter => {
+                    if (self.wordle.hasEnded())
+                        return .none;
                     if (self.curr_word_len == self.wordle.word.len) {
                         self.wordle.sendWord(self.curr_word) catch {};
                         self.clearLetters();
@@ -163,7 +170,7 @@ const Model = struct {
 
     fn renderCurrWord(self: *Model, alloc: std.mem.Allocator) ![]const u8 {
         var curr_word_text: []const u8 = "";
-        if (!self.wordle.hasEnded()) {
+        if (self.wordle.guesslen < self.wordle.max_guesses) {
             for (0..self.curr_word_len) |i| {
                 const c = renderChar(alloc, .{ .char = self.curr_word[i], .match = .unknown });
                 curr_word_text = try joinH(alloc, .{ curr_word_text, c });
@@ -178,7 +185,7 @@ const Model = struct {
 
     fn renderBlankLines(self: *Model, alloc: std.mem.Allocator) ![]const u8 {
         var empty_lines_text: []const u8 = "";
-        if (!self.wordle.hasEnded()) {
+        if (self.wordle.guesslen < self.wordle.max_guesses) {
             for (self.wordle.guesslen..self.wordle.max_guesses - 1) |_| {
                 var row: []const u8 = "";
                 for (0..self.wordle.word.len) |_| {
@@ -191,13 +198,38 @@ const Model = struct {
         return empty_lines_text;
     }
 
+    fn renderEndGame(self: *Model, alloc: std.mem.Allocator) ![]const u8 {
+        if (!self.wordle.hasEnded()) return "";
+
+        const style: zz.Style = .{
+            .foreground = zz.Color.red(),
+        };
+        var text: []const u8 = undefined;
+
+        if (self.wordle.solved) {
+            const guesses_text = try style.render(alloc, try std.fmt.allocPrint(alloc, "{d}", .{self.wordle.guesslen}));
+
+            text = try std.fmt.allocPrint(alloc, "Solved in {s} tries", .{guesses_text[0 .. guesses_text.len - 1]});
+        } else {
+            const word_text = try style.render(alloc, try std.fmt.allocPrint(alloc, "{s}", .{self.wordle.word}));
+            text = try std.fmt.allocPrint(alloc, "Word was {s}", .{word_text});
+        }
+
+        return text;
+    }
+
     fn renderWordleTable(self: *Model, alloc: std.mem.Allocator) ![]const u8 {
+        var end_text = try self.renderEndGame(alloc);
+
         const played_words_text = try self.renderPlayedWords(alloc);
         const curr_word_text = try self.renderCurrWord(alloc);
         const typed_text = try joinV(alloc, .{ played_words_text, curr_word_text });
         const empty_lines = try self.renderBlankLines(alloc);
 
-        const table = try joinV(alloc, .{ typed_text, empty_lines });
+        var table = try joinV(alloc, .{ typed_text, empty_lines });
+
+        end_text = try zz.place.place(alloc, 5 * self.wordle.word.len, 1, .center, .top, end_text);
+        table = try joinV(alloc, .{ end_text, table });
 
         return table;
     }
