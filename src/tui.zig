@@ -1,12 +1,12 @@
 const std = @import("std");
-
+const wordlist = @import("wordlist.zig");
 const Wordle = @import("wordle").Wordle;
 const zz = @import("zigzag");
 pub const uppercase = zz.transforms.uppercase;
 
 const Settings = struct {
     word: []const u8,
-    max_guesses: u32,
+    comptime max_guesses: u32 = 6,
     wordlist: ?*std.StringHashMap(bool),
 };
 
@@ -53,7 +53,7 @@ const Model = struct {
         @panic(@errorName(e));
     }
 
-    pub fn update(self: *Model, msg: Msg, _: *zz.Context) zz.Cmd(Msg) {
+    pub fn update(self: *Model, msg: Msg, ctx: *zz.Context) zz.Cmd(Msg) {
         switch (msg) {
             .key => |k| switch (k.key) {
                 .escape => return .quit,
@@ -71,11 +71,23 @@ const Model = struct {
                         self.clearLetters();
                     }
                 },
-                .char => self.addLetter(msg.key) catch {},
+                .char => {
+                    if (self.wordle.hasEnded() and msg.key.key.char == 'r') {
+                        self.reinit(ctx);
+                        return .none;
+                    }
+                    self.addLetter(msg.key) catch {};
+                },
                 else => {},
             },
         }
         return .none;
+    }
+
+    fn reinit(self: *Model, ctx: *zz.Context) void {
+        self.settings.word = wordlist.getRandWord();
+        self.deinit();
+        _ = self.init(ctx);
     }
 
     pub fn init(self: *Model, ctx: *zz.Context) zz.Cmd(Msg) {
@@ -216,7 +228,7 @@ const Model = struct {
         if (self.wordle.solved) {
             const guesses_text = try style.render(alloc, try std.fmt.allocPrint(alloc, "{d}", .{self.wordle.guesslen}));
 
-            text = try std.fmt.allocPrint(alloc, "Solved in {s} tries", .{guesses_text[0 .. guesses_text.len - 1]});
+            text = try std.fmt.allocPrint(alloc, "Solved in {s} tries\n", .{guesses_text[0 .. guesses_text.len - 1]});
         } else {
             const word_text = try style.render(alloc, try std.fmt.allocPrint(alloc, "{s}", .{self.wordle.word}));
             text = try std.fmt.allocPrint(alloc, "Word was {s}", .{word_text});
@@ -278,9 +290,20 @@ const Model = struct {
     }
 };
 
-pub fn run(alloc: std.mem.Allocator, s: Settings) !void {
-    var program = try zz.Program(Model).initWithOptions(alloc, .{});
-    program.model.settings = s;
+pub fn run(alloc: std.mem.Allocator) !void {
+    var program = try zz.Program(Model).initWithOptions(alloc, .{
+        .kitty_keyboard = true,
+        .title = "Wordle",
+    });
+
+    wordlist.initRand();
+    var wl = try wordlist.constructWordList(alloc);
+    defer wl.clearAndFree();
+
+    program.model.settings = .{
+        .word = wordlist.getRandWord(),
+        .wordlist = &wl,
+    };
     defer program.deinit();
     try program.run();
 }
