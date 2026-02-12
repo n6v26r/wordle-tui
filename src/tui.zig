@@ -1,0 +1,191 @@
+const std = @import("std");
+
+const Wordle = @import("wordle").Wordle;
+const zz = @import("zigzag");
+
+const Settings = struct {
+    word: []const u8,
+    max_guesses: u32,
+};
+
+const Model = struct {
+    pub const Msg = union(enum) {
+        key: zz.KeyEvent,
+    };
+
+    wordle: Wordle,
+    settings: Settings,
+
+    curr_word: []u8,
+    curr_word_len: u32 = 0,
+
+    fn addLetter(self: *Model, key: zz.KeyEvent) !void {
+        if (self.curr_word_len == self.curr_word.len)
+            return error.WordFull;
+
+        const c = std.ascii.toUpper(@as(u8, @truncate(key.key.toChar().?)));
+        self.curr_word[self.curr_word_len] = c;
+        self.curr_word_len += 1;
+    }
+
+    fn delLetter(self: *Model) !void {
+        if (self.curr_word_len == 0)
+            return error.WordEmpty;
+
+        self.curr_word_len -= 1;
+        self.curr_word[self.curr_word_len] = 0;
+    }
+
+    fn clearLetters(self: *Model) void {
+        while (self.curr_word_len > 0) {
+            self.curr_word_len -= 1;
+            self.curr_word[self.curr_word_len] = 0;
+        }
+    }
+
+    fn reportError(e: anyerror) noreturn {
+        @panic(@errorName(e));
+    }
+
+    pub fn update(self: *Model, msg: Msg, _: *zz.Context) zz.Cmd(Msg) {
+        switch (msg) {
+            .key => |k| switch (k.key) {
+                .escape => return .quit,
+                .backspace => self.delLetter() catch {},
+                .enter => {
+                    if (self.curr_word_len == self.wordle.word.len) {
+                        self.wordle.sendWord(self.curr_word) catch {};
+                        self.clearLetters();
+                    }
+                },
+                .char => self.addLetter(msg.key) catch {},
+                else => {},
+            },
+        }
+        return .none;
+    }
+
+    pub fn init(self: *Model, ctx: *zz.Context) zz.Cmd(Msg) {
+        self.wordle = Wordle.init(
+            ctx.persistent_allocator,
+            self.settings.word,
+            self.settings.max_guesses,
+        ) catch |e|
+            reportError(e);
+
+        self.curr_word = self.wordle.alloc.alloc(u8, self.settings.word.len) catch |e| reportError(e);
+        @memset(self.curr_word, 0);
+
+        return .none;
+    }
+
+    pub fn deinit(self: *Model) void {
+        self.wordle.alloc.free(self.curr_word);
+        self.wordle.deinit();
+    }
+
+    pub fn renderChar(alloc: std.mem.Allocator, char: Wordle.AnnotatedChar) []const u8 {
+        const style: zz.Style = .{
+            .foreground = switch (char.match) {
+                .unknown => .none,
+                .none => zz.Color.black(),
+                .partial => zz.Color.blue(),
+                .ok => zz.Color.green(),
+            },
+        };
+        const border: zz.Style = .{
+            .border_style = zz.Border.rounded,
+            .border_bg = .none,
+            .border_fg = switch (char.match) {
+                .unknown => .none,
+                .none => zz.Color.black(),
+                .partial => zz.Color.blue(),
+                .ok => zz.Color.green(),
+            },
+            .border_sides = .all,
+        };
+        const text = std.fmt.allocPrint(alloc, " {c} ", .{char.char}) catch "!";
+        const colored_text = style.render(alloc, text) catch text;
+        return border.render(alloc, colored_text[0 .. colored_text.len - 1]) catch colored_text;
+    }
+
+    pub fn renderSpace(alloc: std.mem.Allocator) []const u8 {
+        const style: zz.Style = .{
+            .background = .none,
+            .foreground = zz.Color.black(),
+        };
+
+        const border: zz.Style = .{
+            .border_style = zz.Border.rounded,
+            .border_bg = .none,
+            .border_fg = zz.Color.brightBlack(),
+            .border_sides = .all,
+        };
+        const text = std.fmt.allocPrint(alloc, "   ", .{}) catch "!";
+        const colored_text = style.render(alloc, text) catch text;
+        return border.render(alloc, colored_text[0 .. colored_text.len - 1]) catch colored_text;
+    }
+
+    fn joinV(alloc: std.mem.Allocator, elems: [2][]const u8) ![]const u8 {
+        if (elems[0].len == 0)
+            return elems[1];
+        if (elems[1].len == 0)
+            return elems[0];
+
+        return try zz.joinVertical(alloc, &elems);
+    }
+    fn joinH(alloc: std.mem.Allocator, elems: [2][]const u8) ![]const u8 {
+        if (elems[0].len == 0)
+            return elems[1];
+        if (elems[1].len == 0)
+            return elems[0];
+
+        return try zz.joinHorizontal(alloc, &elems);
+    }
+
+    pub fn view(self: *Model, ctx: *zz.Context) []const u8 {
+        var guesses_table: []const u8 = "";
+        for (0..self.wordle.guesslen) |i| {
+            var row: []const u8 = "";
+            for (0..self.wordle.word.len) |j| {
+                const c = renderChar(ctx.allocator, self.wordle.guess[i][j]);
+                row = joinH(ctx.allocator, .{ row, c }) catch "ERROR";
+            }
+            guesses_table = joinV(ctx.allocator, .{ guesses_table, row }) catch "ERROR";
+        }
+
+        var curr_word_text: []const u8 = "";
+        if (!self.wordle.hasEnded()) {
+            for (0..self.curr_word_len) |i| {
+                const c = renderChar(ctx.allocator, .{ .char = self.curr_word[i], .match = .unknown });
+                curr_word_text = joinH(ctx.allocator, .{ curr_word_text, c }) catch "ERROR";
+            }
+            for (self.curr_word_len..self.curr_word.len) |_| {
+                const c = renderSpace(ctx.allocator);
+                curr_word_text = joinH(ctx.allocator, .{ curr_word_text, c }) catch "ERROR";
+            }
+        }
+
+        var text = joinV(ctx.allocator, .{ guesses_table, curr_word_text }) catch "ERROR";
+
+        if (self.wordle.guesslen < self.wordle.max_guesses) {
+            for (self.wordle.guesslen..self.wordle.max_guesses - 1) |_| {
+                var row: []const u8 = "";
+                for (0..self.wordle.word.len) |_| {
+                    const c: []const u8 = renderSpace(ctx.allocator);
+                    row = joinH(ctx.allocator, .{ row, c }) catch "ERROR";
+                }
+                text = joinV(ctx.allocator, .{ text, row }) catch "ERROR";
+            }
+        }
+        const centered = zz.place.place(ctx.allocator, ctx.width, ctx.height, .center, .middle, text) catch "ERROR";
+        return centered;
+    }
+};
+
+pub fn run(alloc: std.mem.Allocator, s: Settings) !void {
+    var program = try zz.Program(Model).initWithOptions(alloc, .{});
+    program.model.settings = s;
+    defer program.deinit();
+    try program.run();
+}
