@@ -23,6 +23,7 @@ pub const Wordle = struct {
     keyboard: [AlphabetSize]KeyState = undefined,
     wordfrecv: [AlphabetSize]u32 = std.mem.zeroes(@FieldType(@This(), "wordfrecv")),
     solved: bool = false,
+    wordlist: ?*std.StringHashMap(bool) = null,
 
     fn buildFrecv(self: *Wordle) void {
         for (0..self.word.len) |i| {
@@ -35,11 +36,13 @@ pub const Wordle = struct {
         alloc: std.mem.Allocator,
         word: []const u8,
         max_guesses: u32,
+        wordlist: ?*std.StringHashMap(bool),
     ) !@This() {
         var self: @This() = .{};
         self.alloc = alloc;
         self.max_guesses = max_guesses;
         self.word = word;
+        self.wordlist = wordlist;
 
         @memset(self.keyboard[0..], .unknown);
         self.guess = try alloc.alloc([]AnnotatedChar, self.max_guesses);
@@ -59,6 +62,11 @@ pub const Wordle = struct {
             return error.NoGuessesLeft;
         if (word.len != self.word.len)
             return error.InvalidLen;
+
+        if (self.wordlist) |w| {
+            if (!w.contains(word))
+                return error.NotInWordList;
+        }
 
         var frecv: [AlphabetSize]u32 = self.wordfrecv;
 

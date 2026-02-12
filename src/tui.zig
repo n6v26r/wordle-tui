@@ -7,6 +7,7 @@ pub const uppercase = zz.transforms.uppercase;
 const Settings = struct {
     word: []const u8,
     max_guesses: u32,
+    wordlist: ?*std.StringHashMap(bool),
 };
 
 const Model = struct {
@@ -61,7 +62,12 @@ const Model = struct {
                     if (self.wordle.hasEnded())
                         return .none;
                     if (self.curr_word_len == self.wordle.word.len) {
-                        self.wordle.sendWord(self.curr_word) catch {};
+                        self.wordle.sendWord(self.curr_word) catch |e| switch (e) {
+                            error.NotInWordList => {
+                                return .none;
+                            },
+                            else => {},
+                        };
                         self.clearLetters();
                     }
                 },
@@ -77,6 +83,7 @@ const Model = struct {
             ctx.persistent_allocator,
             self.settings.word,
             self.settings.max_guesses,
+            self.settings.wordlist,
         ) catch |e|
             reportError(e);
 
