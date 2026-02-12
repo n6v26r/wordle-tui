@@ -73,12 +73,13 @@ pub const Wordle = struct {
         var matched: u32 = 0;
         for (0..self.word.len) |i| {
             self.guess[self.guesslen][i] = .{ .char = word[i], .match = .none };
-            self.keyboard[self.guess[self.guesslen][i].char] = .none;
+            if (self.keyboard[word[i]] == .unknown)
+                self.keyboard[word[i]] = .none;
             if (self.word[i] == word[i]) {
                 if (frecv[word[i]] > 0)
                     frecv[word[i]] -= 1;
                 self.guess[self.guesslen][i].match = .ok;
-                self.keyboard[self.guess[self.guesslen][i].char] = .ok;
+                self.keyboard[word[i]] = .ok;
                 matched += 1;
                 continue;
             }
@@ -90,7 +91,8 @@ pub const Wordle = struct {
             if (self.guess[self.guesslen][i].match == .none and frecv[word[i]] > 0) {
                 frecv[word[i]] -= 1;
                 self.guess[self.guesslen][i].match = .partial;
-                self.keyboard[self.guess[self.guesslen][i].char] = .partial;
+                if (self.keyboard[word[i]] != .ok)
+                    self.keyboard[word[i]] = .partial;
                 continue;
             }
         }

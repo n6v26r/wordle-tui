@@ -5,7 +5,8 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{
         .thread_safe = true,
     }){};
-    defer std.debug.print("Memory Leaks: {}\n", .{gpa.deinit()});
+    // defer std.debug.print("Memory Leaks: {}\n", .{gpa.deinit()});
+    defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
     try tui.run(alloc);
