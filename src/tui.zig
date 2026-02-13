@@ -135,6 +135,7 @@ const Model = struct {
                 ctx.persistent_allocator.free(words);
             } else {
                 const word = nyt.getWordleToday(self.wordle.alloc) catch wordlist.getRandWord();
+                defer self.wordle.alloc.free(word);
                 const upper_word = uppercase(ctx.persistent_allocator, word);
                 defer ctx.persistent_allocator.free(upper_word);
                 @memcpy(self.owned_word_buf[0..], upper_word);

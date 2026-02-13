@@ -14,11 +14,11 @@ const WordleData = struct {
     editor: []const u8,
 };
 
-var data: WordleData = undefined;
-
 pub fn getWordle(alloc: std.mem.Allocator, date: []const u8) ![]const u8 {
     const url = try std.fmt.allocPrint(alloc, URL, .{date});
+    defer alloc.free(url);
     const url_c_str = try std.mem.Allocator.dupeZ(alloc, u8, url);
+    defer alloc.free(url_c_str);
 
     const ca_bundle = try curl.allocCABundle(alloc);
     defer ca_bundle.deinit();
@@ -34,8 +34,8 @@ pub fn getWordle(alloc: std.mem.Allocator, date: []const u8) ![]const u8 {
     const parsed = try json.parseFromSlice(WordleData, alloc, writer.buffered(), .{});
     defer parsed.deinit();
 
-    data = parsed.value;
-    return data.solution;
+    const data = parsed.value;
+    return try alloc.dupe(u8, data.solution);
 }
 
 pub fn getWordleToday(alloc: std.mem.Allocator) ![]const u8 {
