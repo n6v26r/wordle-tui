@@ -2,12 +2,15 @@ const std = @import("std");
 const wordlist = @import("wordlist.zig");
 const Wordle = @import("wordle").Wordle;
 const zz = @import("zigzag");
+const nyt = @import("nyt.zig");
+const Store = @import("store.zig").Store;
 pub const uppercase = zz.transforms.uppercase;
 
 const Settings = struct {
     word: []const u8,
     comptime max_guesses: u32 = 6,
     wordlist: ?*std.StringHashMap(bool),
+    nycwordle: bool,
 };
 
 const Model = struct {
@@ -17,6 +20,8 @@ const Model = struct {
 
     wordle: Wordle,
     settings: Settings,
+    store: Store,
+    owned_word_buf: [5]u8 = undefined,
 
     curr_word: []u8,
     curr_word_len: u32 = 0,
@@ -68,6 +73,16 @@ const Model = struct {
                             },
                             else => {},
                         };
+                        const words = self.wordle.getPlayedWords() catch |e| reportError(e);
+                        defer {
+                            for (0..words.len) |i| {
+                                self.wordle.alloc.free(words[i]);
+                            }
+                            self.wordle.alloc.free(words);
+                        }
+                        if (self.settings.nycwordle) {
+                            self.store.saveDailyProgress(words) catch {};
+                        }
                         self.clearLetters();
                     }
                 },
@@ -86,6 +101,7 @@ const Model = struct {
 
     fn reinit(self: *Model, ctx: *zz.Context) void {
         self.settings.word = wordlist.getRandWord();
+        self.settings.nycwordle = false;
         self.deinit();
         _ = self.init(ctx);
     }
@@ -102,11 +118,37 @@ const Model = struct {
         self.curr_word = self.wordle.alloc.alloc(u8, self.settings.word.len) catch |e| reportError(e);
         @memset(self.curr_word, 0);
 
+        self.store = Store.init(ctx.persistent_allocator) catch |e| reportError(e);
+        if (self.settings.nycwordle) {
+            const words_opt = self.store.readDailyProgress(
+                ctx.persistent_allocator,
+            ) catch null;
+            if (words_opt) |words| {
+                @memcpy(self.owned_word_buf[0..], words[words.len - 1]);
+                self.settings.word = self.owned_word_buf[0..];
+                self.wordle.setWord(self.owned_word_buf[0..]);
+                for (0..words.len - 1) |i| {
+                    self.wordle.sendWord(words[i]) catch |e| reportError(e);
+                    ctx.persistent_allocator.free(words[i]);
+                }
+                ctx.persistent_allocator.free(words[words.len - 1]);
+                ctx.persistent_allocator.free(words);
+            } else {
+                const word = nyt.getWordleToday(self.wordle.alloc) catch wordlist.getRandWord();
+                const upper_word = uppercase(ctx.persistent_allocator, word);
+                defer ctx.persistent_allocator.free(upper_word);
+                @memcpy(self.owned_word_buf[0..], upper_word);
+                self.settings.word = self.owned_word_buf[0..];
+                self.wordle.setWord(self.owned_word_buf[0..]);
+            }
+        }
+
         return .none;
     }
 
     pub fn deinit(self: *Model) void {
         self.wordle.alloc.free(self.curr_word);
+        self.store.deinit();
         self.wordle.deinit();
     }
 
@@ -175,7 +217,7 @@ const Model = struct {
 
     fn renderPlayedWords(self: *Model, alloc: std.mem.Allocator) ![]const u8 {
         var played_words_text: []const u8 = "";
-        for (0..self.wordle.guesslen) |i| {
+        for (0..self.wordle.guess_len) |i| {
             var row: []const u8 = "";
             for (0..self.wordle.word.len) |j| {
                 const c = renderChar(alloc, self.wordle.guess[i][j]);
@@ -189,7 +231,7 @@ const Model = struct {
 
     fn renderCurrWord(self: *Model, alloc: std.mem.Allocator) ![]const u8 {
         var curr_word_text: []const u8 = "";
-        if (self.wordle.guesslen < self.wordle.max_guesses) {
+        if (self.wordle.guess_len < self.wordle.max_guesses) {
             for (0..self.curr_word_len) |i| {
                 const c = renderChar(alloc, .{ .char = self.curr_word[i], .match = .unknown });
                 curr_word_text = try joinH(alloc, .{ curr_word_text, c });
@@ -204,8 +246,8 @@ const Model = struct {
 
     fn renderBlankLines(self: *Model, alloc: std.mem.Allocator) ![]const u8 {
         var empty_lines_text: []const u8 = "";
-        if (self.wordle.guesslen < self.wordle.max_guesses) {
-            for (self.wordle.guesslen..self.wordle.max_guesses - 1) |_| {
+        if (self.wordle.guess_len < self.wordle.max_guesses) {
+            for (self.wordle.guess_len..self.wordle.max_guesses - 1) |_| {
                 var row: []const u8 = "";
                 for (0..self.wordle.word.len) |_| {
                     const c: []const u8 = renderBlank(alloc);
@@ -226,7 +268,7 @@ const Model = struct {
         var text: []const u8 = undefined;
 
         if (self.wordle.solved) {
-            const guesses_text = try style.render(alloc, try std.fmt.allocPrint(alloc, "{d}", .{self.wordle.guesslen}));
+            const guesses_text = try style.render(alloc, try std.fmt.allocPrint(alloc, "{d}", .{self.wordle.guess_len}));
 
             text = try std.fmt.allocPrint(alloc, "Solved in {s} tries\n", .{guesses_text[0 .. guesses_text.len - 1]});
         } else {
@@ -303,6 +345,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
     program.model.settings = .{
         .word = wordlist.getRandWord(),
         .wordlist = &wl,
+        .nycwordle = true,
     };
     defer program.deinit();
     try program.run();

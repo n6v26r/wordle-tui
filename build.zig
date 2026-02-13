@@ -18,6 +18,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "wordle", .module = mod },
             },
+            .link_libc = true,
         }),
     });
 
@@ -26,6 +27,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.root_module.addImport("zigzag", zigzag.module("zigzag"));
+
+    const known_folders = b.dependency("known_folders", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("known-folders");
+    exe.root_module.addImport("known-folders", known_folders);
+
+    const dep_curl = b.dependency("curl", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("curl", dep_curl.module("curl"));
 
     b.installArtifact(exe);
 
