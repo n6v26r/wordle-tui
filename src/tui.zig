@@ -10,7 +10,7 @@ const Settings = struct {
     word: []const u8,
     comptime max_guesses: u32 = 6,
     wordlist: ?*std.StringHashMap(bool),
-    nycwordle: bool,
+    nyc_wordle: bool,
 };
 
 const Model = struct {
@@ -80,7 +80,7 @@ const Model = struct {
                             }
                             self.wordle.alloc.free(words);
                         }
-                        if (self.settings.nycwordle) {
+                        if (self.settings.nyc_wordle) {
                             self.store.saveDailyProgress(words) catch {};
                         }
                         self.clearLetters();
@@ -101,7 +101,7 @@ const Model = struct {
 
     fn reinit(self: *Model, ctx: *zz.Context) void {
         self.settings.word = wordlist.getRandWord();
-        self.settings.nycwordle = false;
+        self.settings.nyc_wordle = false;
         self.deinit();
         _ = self.init(ctx);
     }
@@ -119,7 +119,7 @@ const Model = struct {
         @memset(self.curr_word, 0);
 
         self.store = Store.init(ctx.persistent_allocator) catch |e| reportError(e);
-        if (self.settings.nycwordle) {
+        if (self.settings.nyc_wordle) {
             const words_opt = self.store.readDailyProgress(
                 ctx.persistent_allocator,
             ) catch null;
@@ -134,11 +134,19 @@ const Model = struct {
                 ctx.persistent_allocator.free(words[words.len - 1]);
                 ctx.persistent_allocator.free(words);
             } else {
-                const word = nyt.getWordleToday(self.wordle.alloc) catch wordlist.getRandWord();
-                defer self.wordle.alloc.free(word);
-                const upper_word = uppercase(ctx.persistent_allocator, word);
-                defer ctx.persistent_allocator.free(upper_word);
-                @memcpy(self.owned_word_buf[0..], upper_word);
+                const word_opt = nyt.getWordleToday(self.wordle.alloc) catch null;
+                if (word_opt) |word| {
+                    defer self.wordle.alloc.free(word);
+                    const upper_word = uppercase(ctx.persistent_allocator, word);
+                    defer ctx.persistent_allocator.free(upper_word);
+                    @memcpy(self.owned_word_buf[0..], upper_word);
+                } else {
+                    self.settings.nyc_wordle = false;
+                    const word = wordlist.getRandWord();
+                    const upper_word = uppercase(ctx.persistent_allocator, word);
+                    defer ctx.persistent_allocator.free(upper_word);
+                    @memcpy(self.owned_word_buf[0..], upper_word);
+                }
                 self.settings.word = self.owned_word_buf[0..];
                 self.wordle.setWord(self.owned_word_buf[0..]);
             }
@@ -346,7 +354,7 @@ pub fn run(alloc: std.mem.Allocator) !void {
     program.model.settings = .{
         .word = wordlist.getRandWord(),
         .wordlist = &wl,
-        .nycwordle = true,
+        .nyc_wordle = true,
     };
     defer program.deinit();
     try program.run();
